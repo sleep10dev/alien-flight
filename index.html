@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <title>Alien Flight - Indie Edition</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="icon.png" type="image/png">
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #080711;
+            font-family: 'Courier New', Courier, monospace;
+            color: #fff;
+        }
+        canvas {
+            display: block;
+            background: #080711;
+            touch-action: none;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 18px;
+            font-weight: bold;
+            pointer-events: none;
+            color: #ffcc00;
+            text-shadow: 2px 2px #000;
+        }
+        #menu {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(8, 7, 17, 0.92);
+            z-index: 10;
+        }
+        h1 {
+            font-size: 32px;
+            margin-bottom: 10px;
+            color: #00ffcc;
+            text-shadow: 3px 3px #ff00ff;
+            text-align: center;
+        }
+        p {
+            font-size: 15px;
+            margin-bottom: 30px;
+            color: #b8b8d0;
+            text-align: center;
+            padding: 0 25px;
+            line-height: 1.4;
+        }
+        .btn {
+            background: #ff0055;
+            color: #fff;
+            border: 3px solid #fff;
+            padding: 14px 35px;
+            font-size: 18px;
+            font-family: 'Courier New', Courier, monospace;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 4px 4px 0px #00ffcc;
+            transition: 0.1s;
+        }
+        .btn:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0px #00ffcc;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <div>PT: <span id="scoreVal">0</span></div>
+        <div>VIDAS: <span id="livesVal">❤️ ❤️ ❤️</span></div>
+    </div>
+
+    <div id="menu">
+        <h1>VIAGEM ESPACIAL</h1>
+        <p>Aumente a velocidade, pegue cristais e ouça a trilha sonora espacial! Chegue a 99999 pontos ou fique perdido no espaço. Feito por um dev solo.</p>
+        <button class="btn" id="startBtn">VOAR!</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const menu = document.getElementById('menu');
+        const startBtn = document.getElementById('startBtn');
+        const scoreVal = document.getElementById('scoreVal');
+        const livesVal = document.getElementById('livesVal');
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        let gameState = 'MENU'; // MENU, PLAYING, VICTORY, GAMEOVER_SCENE
+        let score = 0;
+        let lives = 3;
+        let baseSpeed = 4.0;
+        let shieldTime = 0;
+        let screenShake = 0;
+        let sceneTimer = 0;
+
+        // Gerador de Som e Trilha Sonora (Web Audio API)
+        let audioCtx = null;
+        let musicInterval = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playTone(freq, type, duration, delay = 0) {
+            if (!audioCtx) return;
+            setTimeout(() => {
+                if (gameState !== 'PLAYING') return;
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.value = freq;
+                gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            }, delay);
+        }
+
+        function startMusic() {
+            initAudio();
+            if (musicInterval) clearInterval(musicInterval);
+            
+            const notes = [220, 247, 261, 293, 329, 392];
+            musicInterval = setInterval(() => {
+                if (gameState !== 'PLAYING') return;
+                let note = notes[Math.floor(Math.random() * notes.length)];
+                playTone(note, 'triangle', 0.3);
+                setTimeout(() => playTone(note * 1.5, 'sine', 0.2), 150);
+            }, 400);
+        }
+
+        function stopMusic() {
+            if (musicInterval) clearInterval(musicInterval);
+        }
+
+        let stars = [];
+        for(let i=0; i<60; i++) {
+            stars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2 + 0.5,
+                speed: Math.random() * 1.5 + 0.5
+            });
+        }
+
+        let player = {
+            x: canvas.width / 2,
+            y: canvas.height - 120,
+            radius: 22,
+            targetX: canvas.width / 2,
+            targetY: canvas.height - 120,
+            wobble: 0
+        };
+
+        let obstacles = [];
+        let particles = [];
+        let alienMessage = { text: '', timer: 0 };
+
+        const planetTypes = [
+            { name: 'Terra', radius: 45, color: '#4da6ff', ring: false, points: 200 },
+            { name: 'Júpiter', radius: 65, color: '#e6b800', ring: false, points: 400 },
+            { name: 'Saturno', radius: 50, color: '#ffcc66', ring: true, points: 500 },
+            { name: 'Marte', radius: 35, color: '#ff4d4d', ring: false, points: 250 },
+            { name: 'Vênus', radius: 38, color: '#ffb366', ring: false, points: 200 },
+            { name: 'Netuno', radius: 40, color: '#3366ff', ring: false, points: 300 }
+        ];
+
+        const chatPhrases = ["Uhuul!", "Cuidado!", "Legal!", "Rápido!", "Uh la la!"];
+
+        function showAlienMsg() {
+            alienMessage.text = chatPhrases[Math.floor(Math.random() * chatPhrases.length)];
+            alienMessage.timer = 60;
+        }
+
+        let isTouching = false;
+        window.addEventListener('pointerdown', (e) => { if (gameState === 'PLAYING') { isTouching = true; updateTouchPos(e); } });
+        window.addEventListener('pointermove', (e) => { if (isTouching && gameState === 'PLAYING') updateTouchPos(e); });
+        window.addEventListener('pointerup', () => { isTouching = false; });
+
+        function updateTouchPos(e) {
+            player.targetX = e.clientX;
+            player.targetY = e.clientY;
+        }
+
+        startBtn.addEventListener('click', () => {
+            menu.style.display = 'none';
+            resetGame();
+            gameState = 'PLAYING';
+            startMusic();
+            loop();
+        });
+
+        function resetGame() {
+            score = 0;
+            lives = 3;
+            baseSpeed = 4.0;
+            shieldTime = 0;
+            sceneTimer = 0;
+            obstacles = [];
+            particles = [];
+            player.x = canvas.width / 2;
+            player.y = canvas.height - 120;
+            player.targetX = player.x;
+            player.targetY = player.y;
+            updateUI();
+        }
+
+        function updateUI() {
+            scoreVal.innerText = score;
+            let hearts = '❤️ '.repeat(lives);
+            if (shieldTime > 0) hearts += ' 🛡️';
+            livesVal.innerText = hearts;
+        }
+
+        function spawnObjects() {
+            if (Math.random() < 0.03) {
+                let rand = Math.random();
+                let type, subType = null;
+
+                if (rand < 0.18) {
+                    type = 'crystal';
+                } else if (rand < 0.25) {
+                    type = 'shield';
+                } else if (rand < 0.38) {
+                    type = 'planet';
+                    subType = planetTypes[Math.floor(Math.random() * planetTypes.length)];
+                } else {
+                    type = 'meteor';
+                }
+
+                let radius = (type === 'crystal' || type === 'shield') ? 14 : (type === 'planet' ? subType.radius : Math.random() * 18 + 15);
+
+                obstacles.push({
+                    x: Math.random() * (canvas.width - 80) + 40,
+                    y: -70,
+                    radius: radius,
+                    speed: (Math.random() * 2 + 1.5) + (type === 'meteor' ? baseSpeed * 0.4 : 0),
+                    type: type,
+                    planetData: subType,
+                    angle: Math.random() * Math.PI,
+                    rotSpeed: (Math.random() - 0.5) * 0.03
+                });
+            }
+        }
+
+        function createExplosion(x, y, color) {
+            playTone(120, 'sawtooth', 0.2);
+            for (let i = 0; i < 12; i++) {
+                particles.push({
+                    x: x, y: y,
+                    vx: (Math.random() - 0.5) * 5,
+                    vy: (Math.random() - 0.5) * 5,
+                    radius: Math.random() * 3 + 1,
+                    color: color,
+                    alpha: 1
+                });
+            }
+        }
+
+        function update() {
+            let currentSpeed = baseSpeed + (score / 1000);
+
+            player.x += (player.targetX - player.x) * 0.15;
+            player.y += (player.targetY - player.y) * 0.15;
+            player.x = Math.max(player.radius, Math.min(canvas.width - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(canvas.height - player.radius, player.y));
+            player.wobble += 0.1;
+
+            if (shieldTime > 0) shieldTime--;
+            if (screenShake > 0) screenShake--;
+            if (alienMessage.timer > 0) alienMessage.timer--;
+
+            stars.forEach(s => {
+                s.y += s.speed + currentSpeed * 0.3;
+                if (s.y > canvas.height) { s.y = 0; s.x = Math.random() * canvas.width; }
+            });
+
+            spawnObjects();
+
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                let obs = obstacles[i];
+                obs.y += obs.speed * (currentSpeed / baseSpeed);
+                obs.angle += obs.rotSpeed;
+
+                let dist = Math.hypot(player.x - obs.x, player.y - obs.y);
+                if (dist < player.radius + obs.radius) {
+                    if (obs.type === 'crystal') {
+                        score += 50;
+                        playTone(587.33, 'sine', 0.15);
+                        showAlienMsg();
+                        createExplosion(obs.x, obs.y, '#00ffcc');
+                    } else if (obs.type === 'shield') {
+                        shieldTime = 300;
+                        playTone(880, 'sine', 0.2);
+                        showAlienMsg();
+                        createExplosion(obs.x, obs.y, '#00ff00');
+                    } else if (obs.type === 'planet') {
+                        score += obs.planetData.points;
+                        playTone(440, 'triangle', 0.25);
+                        showAlienMsg();
+                        createExplosion(obs.x, obs.y, obs.planetData.color);
+                    } else {
+                        if (shieldTime > 0) {
+                            createExplosion(obs.x, obs.y, '#ffff00');
+                        } else {
+                            lives--;
+                            screenShake = 15;
+                            createExplosion(obs.x, obs.y, '#ff3300');
+                            if (lives <= 0) {
+                                gameState = 'GAMEOVER_SCENE';
+                                stopMusic();
+                            }
+                        }
+                    }
+                    obstacles.splice(i, 1);
+                    updateUI();
+                    
+                    if (score >= 99999) {
+                        gameState = 'VICTORY';
+                        stopMusic();
+                    }
+                    continue;
+                }
+
+                if (obs.y > canvas.height + 60) {
+                    if (obs.type === 'meteor') {
+                        score += 10;
+                        if (score >= 99999) {
+                            gameState = 'VICTORY';
+                            stopMusic();
+                        }
+                    }
+                    obstacles.splice(i, 1);
+                    updateUI();
+                }
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx; p.y += p.vy;
+                p.alpha -= 0.04;
+                if (p.alpha <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function draw() {
+            ctx.save();
+            if (screenShake > 0) {
+                let shakeX = (Math.random() - 0.5) * 8;
+                let shakeY = (Math.random() - 0.5) * 8;
+                ctx.translate(shakeX, shakeY);
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Estrelas
+            ctx.fillStyle = '#ffffff';
+            stars.forEach(s => {
+                ctx.globalAlpha = Math.sin(s.y) * 0.5 + 0.5;
+                ctx.fillRect(s.x, s.y, s.size, s.size);
+            });
+            ctx.globalAlpha = 1.0;
+
+            // --- CENA DE DERROTA: PERDIDO NO ESPAÇO ---
+            if (gameState === 'GAMEOVER_SCENE') {
+                sceneTimer++;
+                let floatY = canvas.height / 2 + Math.sin(sceneTimer * 0.04) * 15;
+                
+                // Pedaços da nave destruída no fundo
+                ctx.fillStyle = '#555';
+                ctx.fillRect(canvas.width / 2 - 60, floatY + 40, 20, 8);
+                ctx.fillRect(canvas.width / 2 + 40, floatY + 60, 15, 15);
+
+                // O Alienzinho flutuando sozinho com capacete de oxigênio
+                ctx.save();
+                ctx.translate(canvas.width / 2, floatY);
+                ctx.rotate(Math.sin(sceneTimer * 0.05) * 0.2);
+
+                // Corpo do alien
+                ctx.fillStyle = '#00ff66';
+                ctx.beginPath();
+                ctx.arc(0, 0, 14, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Olhinhos tristes (> < ou x x)
+                ctx.fillStyle = '#000';
+                ctx.font = '10px Courier New';
+                ctx.fillText("x x", -7, 2);
+
+                // Capacete de vidro espacial redondinho
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(0, 0, 18, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.restore();
+
+                // Mensagem dramática e fofa
+                ctx.fillStyle = '#ff5555';
+                ctx.font = 'bold 18px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText("✨ PERDIDO NO ESPAÇO... ✨", canvas.width / 2, canvas.height / 3);
+
+                ctx.fillStyle = '#aaa';
+                ctx.font = '13px Courier New';
+                ctx.fillText(`Sua nave explodiu e você ficou à deriva. (Pontos: ${score})`, canvas.width / 2, canvas.height / 3 + 35);
+
+                if (sceneTimer > 180) { // Mostra o menu após 3 segundos flutuando
+                    menu.style.display = 'flex';
+                    document.querySelector('#menu h1').innerText = 'FIM DE JOGO';
+                    document.querySelector('#menu p').innerText = `Você ficou perdido no espaço com ${score} pontos. Tente resgatar sua nave!`;
+                    startBtn.innerText = 'TENTAR DE NOVO';
+                    gameState = 'OVER';
+                }
+
+                ctx.restore();
+                return;
+            }
+
+            // --- CENA DE VITÓRIA: REENCONTRO COM A FAMÍLIA ---
+            if (gameState === 'VICTORY') {
+                sceneTimer++;
+                
+                ctx.save();
+                ctx.translate(canvas.width / 2, canvas.height / 3 + Math.sin(sceneTimer * 0.05) * 10);
+                
+                ctx.fillStyle = '#ff00ff';
+                ctx.strokeStyle = '#00ffcc';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.ellipse(0, 0, 70, 25, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = 'rgba(0, 255, 204, 0.6)';
+                ctx.beginPath();
+                ctx.arc(0, -10, 25, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                ctx.fillStyle = '#00ff66';
+                ctx.beginPath();
+                ctx.arc(-8, -12, 4, 0, Math.PI * 2);
+                ctx.arc(8, -12, 4, 0, Math.PI * 2);
+                ctx.arc(0, -15, 5, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.restore();
+
+                ctx.fillStyle = '#00ffcc';
+                ctx.font = 'bold 20px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText("✨ VOCÊ REENCONTROU SUA FAMÍLIA! ✨", canvas.width / 2, canvas.height / 2 + 50);
+                
+                ctx.fillStyle = '#fff';
+                ctx.font = '14px Courier New';
+                ctx.fillText("Missão cumprida com sucesso. Fim da jornada!", canvas.width / 2, canvas.height / 2 + 85);
+
+                if (sceneTimer > 300) {
+                    menu.style.display = 'flex';
+                    document.querySelector('#menu h1').innerText = 'MISSÃO CUMPRIDA!';
+                    document.querySelector('#menu p').innerText = `Parabéns! Você alcançou os 99999 pontos e reencontrou sua família!`;
+                    startBtn.innerText = 'JOGAR DE NOVO';
+                }
+
+                ctx.restore();
+                return;
+            }
+
+            // Obstáculos normais
+            obstacles.forEach(obs => {
+                ctx.save();
+                ctx.translate(obs.x, obs.y);
+                ctx.rotate(obs.angle);
+
+                if (obs.type === 'crystal') {
+                    ctx.fillStyle = '#00ffcc';
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(0, -obs.radius);
+                    ctx.lineTo(obs.radius * 0.8, 0);
+                    ctx.lineTo(0, obs.radius);
+                    ctx.lineTo(-obs.radius * 0.8, 0);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (obs.type === 'shield') {
+                    ctx.fillStyle = '#00ff00';
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (obs.type === 'planet') {
+                    let p = obs.planetData;
+                    if (p.ring) {
+                        ctx.strokeStyle = 'rgba(255, 204, 102, 0.7)';
+                        ctx.lineWidth = 4;
+                        ctx.beginPath();
+                        ctx.ellipse(0, 0, p.radius * 1.6, p.radius * 0.4, Math.PI / 5, 0, Math.PI * 2);
+                        ctx.stroke();
+                    }
+                    ctx.fillStyle = p.color;
+                    ctx.strokeStyle = '#000';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, p.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                } else {
+                    ctx.fillStyle = '#7a7a8c';
+                    ctx.strokeStyle = '#3d3d4d';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, obs.radius, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                }
+                ctx.restore();
+            });
+
+            particles.forEach(p => {
+                ctx.save();
+                ctx.globalAlpha = p.alpha;
+                ctx.fillStyle = p.color;
+                ctx.fillRect(p.x, p.y, p.radius * 1.5, p.radius * 1.5);
+                ctx.restore();
+            });
+
+            // Nave do Jogador
+            ctx.save();
+            let tilt = (player.x - player.targetX) * 0.05;
+            ctx.translate(player.x, player.y + Math.sin(player.wobble) * 3);
+            ctx.rotate(tilt);
+
+            if (shieldTime > 0) {
+                ctx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(0, 0, player.radius + 10, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            ctx.fillStyle = '#ff5500';
+            ctx.beginPath();
+            ctx.moveTo(-8, 12);
+            ctx.lineTo(0, 22 + Math.random() * 8);
+            ctx.lineTo(8, 12);
+            ctx.fill();
+
+            ctx.fillStyle = '#b0b0c7';
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.ellipse(0, 8, 22, 9, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = 'rgba(0, 255, 204, 0.5)';
+            ctx.beginPath();
+            ctx.arc(0, -2, 11, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = '#00ff66';
+            ctx.beginPath();
+            ctx.arc(0, -3, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-2, -5, 1.5, 2);
+            ctx.fillRect(1, -5, 1.5, 2);
+
+            if (alienMessage.timer > 0) {
+                ctx.fillStyle = '#fff';
+                ctx.font = '12px Courier New';
+                ctx.textAlign = 'left';
+                ctx.fillText(alienMessage.text, 20, -15);
+            }
+
+            ctx.restore();
+            ctx.restore();
+        }
+
+        function loop() {
+            if (gameState !== 'PLAYING' && gameState !== 'VICTORY' && gameState !== 'GAMEOVER_SCENE') return;
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+    </script>
+</body>
+</html>
